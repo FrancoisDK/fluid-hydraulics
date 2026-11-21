@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Download, FileDown, Lock, RotateCcw, Unlock } from 'lucide-react';
+import { Download, FileDown, FileText, Lock, RotateCcw, Unlock } from 'lucide-react';
 import {
   FITTINGS_CATALOG,
   FLUID_PRESETS,
@@ -17,6 +17,7 @@ import {
   PipeLegConfig,
   PumpCurvePoint,
 } from './utils/hydraulicsSolver';
+import { exportHydraulicsPdf } from './utils/pdfReport';
 import { SystemSchematicStrip } from './components/SystemSchematicStrip';
 import { SystemCurveChart } from './components/SystemCurveChart';
 import { MoodyDiagramChart } from './components/MoodyDiagramChart';
@@ -516,6 +517,7 @@ export default function App() {
         const clone = document.documentElement.cloneNode(true) as HTMLElement;
         const rootEl = clone.querySelector('#root');
         if (rootEl) rootEl.innerHTML = '';
+        clone.querySelectorAll('[data-runtime-decoded="1"]').forEach((el) => el.remove());
         htmlBlob = new Blob([`<!doctype html>\n${clone.outerHTML}`], {
           type: 'text/html;charset=utf-8',
         });
@@ -541,6 +543,43 @@ export default function App() {
     } finally {
       setIsPackagingHtml(false);
     }
+  };
+
+  const handleExportPdf = () => {
+    const fluidObj = FLUID_PRESETS.find((f) => f.id === fluidPresetId);
+    const suctionSizeObj =
+      suctionStandard.id !== 'custom' && suctionStandard.sizes.length > 0
+        ? suctionStandard.sizes[Math.min(suctionSizeIdx, suctionStandard.sizes.length - 1)]
+        : null;
+    const dischargeSizeObj =
+      dischargeStandard.id !== 'custom' && dischargeStandard.sizes.length > 0
+        ? dischargeStandard.sizes[Math.min(dischargeSizeIdx, dischargeStandard.sizes.length - 1)]
+        : null;
+
+    exportHydraulicsPdf({
+      flowRateM3h: effectiveFlowM3h,
+      fluidName: fluidObj ? fluidObj.name : 'Custom Fluid',
+      densityKgM3,
+      viscosityMPas,
+      pvKpa,
+      atmBar,
+      source,
+      dest,
+      suctionStandardName: suctionStandard.name,
+      suctionSizeLabel: suctionSizeObj ? suctionSizeObj.label : `Custom (${suctionLeg.innerDiaMm.toFixed(1)} mm)`,
+      suctionLeg,
+      dischargeStandardName: dischargeStandard.name,
+      dischargeSizeLabel: dischargeSizeObj ? dischargeSizeObj.label : `Custom (${dischargeLeg.innerDiaMm.toFixed(1)} mm)`,
+      dischargeLeg,
+      valve,
+      systemResult,
+      sortedPumpPoints,
+      dutyIntersection,
+      suctionFittings,
+      suctionCustomFittings,
+      dischargeFittings,
+      dischargeCustomFittings,
+    });
   };
 
   const sucVelStatus = getSuctionVelStatus(systemResult.suction.v);
@@ -614,10 +653,18 @@ export default function App() {
             <button
               type="button"
               onClick={handleExportCsv}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-slate-800/80 text-slate-200 border border-slate-700 rounded-md hover:bg-slate-800 hover:border-slate-600 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-300" />
+              Export CSV
+            </button>
+            <button
+              type="button"
+              onClick={handleExportPdf}
               className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 rounded-md hover:bg-cyan-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5" />
-              Export CSV
+              <FileText className="w-3.5 h-3.5" />
+              Export PDF
             </button>
           </div>
         </div>

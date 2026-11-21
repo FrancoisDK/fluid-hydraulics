@@ -32,7 +32,16 @@ function getLatestSourceMtimeMs(): number {
 }
 
 function makeFileProtocolSafe(html: string): string {
-  return html.replace(/<script type="module" crossorigin>/g, '<script type="module">');
+  if (/<script\s+type="module">\s*\(function\(\)\{var b=atob\("/.test(html)) {
+    return html;
+  }
+  return html.replace(
+    /<script\s+type="module"[^>]*>([\s\S]*)<\/script>/i,
+    (_match, jsCode: string) => {
+      const b64 = Buffer.from(jsCode, 'utf-8').toString('base64');
+      return `<script type="module">(function(){var b=atob("${b64}"),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);var s=document.createElement("script");s.type="module";s.setAttribute("data-runtime-decoded","1");s.textContent=new TextDecoder().decode(a);(document.head||document.documentElement).appendChild(s);})();</script>`;
+    }
+  );
 }
 
 function singleFileDownloadPlugin(): Plugin {
@@ -78,7 +87,7 @@ function singleFileDownloadPlugin(): Plugin {
           }
 
           res.statusCode = 200;
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Content-Type', 'application/octet-stream');
           res.setHeader(
             'Content-Disposition',
             'attachment; filename="pump-system-hydraulics-calculator.html"'
