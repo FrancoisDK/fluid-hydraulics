@@ -1,0 +1,8 @@
+{
+  "name": "Remix SI Fluid Hydraulics Calculator",
+  "description": "Engineering fluid hydraulics calculator with Colebrook-White friction solver, Darcy-Weisbach head loss, SI metric pipe database, expanded fittings builder, Moody diagram, and system curve plot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
