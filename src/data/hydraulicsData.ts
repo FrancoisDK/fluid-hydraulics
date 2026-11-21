@@ -22,6 +22,7 @@ export interface FluidPreset {
   name: string;
   rho: number | null; // kg/m3
   mu: number | null;  // mPa.s (cP)
+  pvKpa: number | null; // vapor pressure in kPa(a)
 }
 
 export type FittingCategoryId =
@@ -238,16 +239,16 @@ export const ROUGHNESS_PRESETS: RoughnessPreset[] = [
 ];
 
 export const FLUID_PRESETS: FluidPreset[] = [
-  { id: 'water_10', name: 'Water at 10°C', rho: 999.7, mu: 1.307 },
-  { id: 'water_20', name: 'Water at 20°C (Standard)', rho: 998.2, mu: 1.002 },
-  { id: 'water_40', name: 'Water at 40°C', rho: 992.2, mu: 0.653 },
-  { id: 'water_60', name: 'Water at 60°C', rho: 983.2, mu: 0.467 },
-  { id: 'water_80', name: 'Water at 80°C', rho: 971.8, mu: 0.355 },
-  { id: 'glycol_30', name: 'Ethylene Glycol 30% (20°C)', rho: 1043.0, mu: 2.40 },
-  { id: 'glycol_50', name: 'Ethylene Glycol 50% (20°C)', rho: 1072.0, mu: 4.20 },
-  { id: 'diesel', name: 'Diesel Fuel (20°C)', rho: 840.0, mu: 3.00 },
-  { id: 'iso_vg32', name: 'Hydraulic Oil ISO VG 32 (40°C)', rho: 860.0, mu: 27.5 },
-  { id: 'custom', name: 'Custom Fluid', rho: null, mu: null },
+  { id: 'water_10', name: 'Water at 10°C', rho: 999.7, mu: 1.307, pvKpa: 1.23 },
+  { id: 'water_20', name: 'Water at 20°C (Standard)', rho: 998.2, mu: 1.002, pvKpa: 2.34 },
+  { id: 'water_40', name: 'Water at 40°C', rho: 992.2, mu: 0.653, pvKpa: 7.38 },
+  { id: 'water_60', name: 'Water at 60°C', rho: 983.2, mu: 0.467, pvKpa: 19.94 },
+  { id: 'water_80', name: 'Water at 80°C', rho: 971.8, mu: 0.355, pvKpa: 47.39 },
+  { id: 'glycol_30', name: 'Ethylene Glycol 30% (20°C)', rho: 1043.0, mu: 2.40, pvKpa: 2.00 },
+  { id: 'glycol_50', name: 'Ethylene Glycol 50% (20°C)', rho: 1072.0, mu: 4.20, pvKpa: 1.60 },
+  { id: 'diesel', name: 'Diesel Fuel (20°C)', rho: 840.0, mu: 3.00, pvKpa: 0.50 },
+  { id: 'iso_vg32', name: 'Hydraulic Oil ISO VG 32 (40°C)', rho: 860.0, mu: 27.5, pvKpa: 0.01 },
+  { id: 'custom', name: 'Custom Fluid', rho: null, mu: null, pvKpa: null },
 ];
 
 export const FITTING_CATEGORIES: { id: FittingCategoryId; label: string }[] = [

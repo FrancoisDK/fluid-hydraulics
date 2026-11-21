@@ -3,6 +3,8 @@ import { PipeStandard } from '../data/hydraulicsData';
 import { calcHydraulics } from '../utils/hydraulicsSolver';
 
 interface PipeSizingTableProps {
+  targetLine: 'suction' | 'discharge';
+  onSelectTargetLine: (line: 'suction' | 'discharge') => void;
   standard: PipeStandard;
   selectedSizeIdx: number;
   flowRateM3h: number;
@@ -13,15 +15,26 @@ interface PipeSizingTableProps {
   onSelectSize: (index: number) => void;
 }
 
-function getVelocityAssessment(v: number): { label: string; toneClass: string } {
+function getVelocityAssessment(
+  v: number,
+  line: 'suction' | 'discharge'
+): { label: string; toneClass: string } {
   if (v === 0) return { label: '— No Flow', toneClass: 'text-slate-400' };
+  if (line === 'suction') {
+    if (v < 0.4) return { label: '▲ Low v', toneClass: 'text-amber-400' };
+    if (v <= 1.5) return { label: '● Optimal (Suc)', toneClass: 'text-emerald-400' };
+    if (v <= 2.2) return { label: '▲ High (Suc)', toneClass: 'text-amber-400' };
+    return { label: '✖ Excessive', toneClass: 'text-rose-400' };
+  }
   if (v < 0.5) return { label: '▲ Low v', toneClass: 'text-amber-400' };
-  if (v <= 2.5) return { label: '● Optimal', toneClass: 'text-emerald-400' };
+  if (v <= 2.5) return { label: '● Optimal (Dis)', toneClass: 'text-emerald-400' };
   if (v <= 4.0) return { label: '▲ High v', toneClass: 'text-amber-400' };
   return { label: '✖ Excessive', toneClass: 'text-rose-400' };
 }
 
 export const PipeSizingTable: React.FC<PipeSizingTableProps> = ({
+  targetLine,
+  onSelectTargetLine,
   standard,
   selectedSizeIdx,
   flowRateM3h,
@@ -41,18 +54,46 @@ export const PipeSizingTable: React.FC<PipeSizingTableProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100 tracking-tight">
-            Pipe Sizing Comparison — {standard.name}
+            Pipe Sizing Comparison — {targetLine === 'suction' ? 'Suction' : 'Discharge'} ({standard.name})
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Straight-pipe friction evaluation across all nominal sizes for Q = {flowRateM3h.toFixed(1)} m³/h · L = {pipeLengthM.toFixed(1)} m
+            Straight-pipe evaluation for Q = {flowRateM3h.toFixed(1)} m³/h · L = {pipeLengthM.toFixed(1)} m ·{' '}
+            {targetLine === 'suction' ? 'Suction target 0.4–1.5 m/s' : 'Discharge target 0.5–2.5 m/s'}
           </p>
         </div>
-        <span className="text-xs text-slate-400">Click any row to select diameter</span>
+
+        <div className="flex items-center gap-3">
+          <div className="inline-flex border border-slate-800 rounded-md overflow-hidden bg-[#070B12]">
+            <button
+              type="button"
+              onClick={() => onSelectTargetLine('suction')}
+              className={`px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                targetLine === 'suction'
+                  ? 'bg-emerald-500/15 text-emerald-300 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Suction Line
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTargetLine('discharge')}
+              className={`px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                targetLine === 'discharge'
+                  ? 'bg-cyan-500/15 text-cyan-300 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Discharge Line
+            </button>
+          </div>
+          <span className="hidden sm:inline text-xs text-slate-400">Click row to apply ID</span>
+        </div>
       </div>
 
       {isCustom ? (
         <div className="bg-[#070B12] border border-slate-800/80 rounded-md py-8 text-center text-xs text-slate-400">
-          Select a metric or ASME pipe standard in the Pipe Database panel to compare nominal sizes.
+          Select a metric or ASME pipe standard for the {targetLine} line to compare nominal sizes.
         </div>
       ) : (
         <div className="bg-[#070B12] border border-slate-800/90 rounded-md overflow-x-auto max-h-[340px] overflow-y-auto">
@@ -85,7 +126,7 @@ export const PipeSizingTable: React.FC<PipeSizingTableProps> = ({
                 );
                 const dpBar = r.dpFrictionPa / 1e5;
                 const dpKpaPerM = pipeLengthM > 0 ? r.dpFrictionPa / 1000 / pipeLengthM : 0;
-                const status = getVelocityAssessment(r.v);
+                const status = getVelocityAssessment(r.v, targetLine);
                 const isSelected = idx === selectedSizeIdx;
 
                 return (

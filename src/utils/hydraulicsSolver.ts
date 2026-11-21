@@ -407,3 +407,367 @@ export function findPumpSystemIntersection(
   return { found: true, qOp, hOp, dpOpBar, effOp, hydPowerKw, shaftPowerKw };
 }
 
+export interface PipeLegConfig {
+  lengthM: number;
+  innerDiaMm: number;
+  roughnessMm: number;
+  sumK: number;
+}
+
+export interface BoundaryCondition {
+  gaugeBar: number; // bar(g)
+  elevM: number;    // m relative to pump centerline (z = 0)
+}
+
+export type ControlValveCharacteristic = 'equal_pct' | 'linear' | 'quick_open';
+export type ControlValveMode = 'throttle_kv' | 'target_flow' | 'bypass';
+
+export interface ControlValveConfig {
+  mode: ControlValveMode;
+  kv100: number;
+  openingPct: number;
+  characteristic: ControlValveCharacteristic;
+  rangeability?: number;
+}
+
+export function calcControlValveKv(
+  kv100: number,
+  openingPct: number,
+  characteristic: ControlValveCharacteristic,
+  rangeability = 50
+): number {
+  const safeKv100 = Math.max(0.01, kv100);
+  const u = Math.max(0.01, Math.min(1, openingPct / 100));
+  const R = Math.max(2, rangeability);
+
+  if (characteristic === 'linear') {
+    return safeKv100 * u;
+  }
+  if (characteristic === 'quick_open') {
+    return safeKv100 * Math.sqrt(u);
+  }
+  // Equal percentage: Kv(u) = Kv100 * R^(u - 1)
+  return safeKv100 * Math.pow(R, u - 1);
+}
+
+export function calcControlValveOpeningFromKv(
+  kvReq: number,
+  kv100: number,
+  characteristic: ControlValveCharacteristic,
+  rangeability = 50
+): number {
+  const safeKv100 = Math.max(0.01, kv100);
+  const ratio = Math.max(0, kvReq / safeKv100);
+  if (ratio >= 1) return 100;
+  if (ratio <= 0) return 0;
+
+  if (characteristic === 'linear') {
+    return ratio * 100;
+  }
+  if (characteristic === 'quick_open') {
+    return ratio * ratio * 100;
+  }
+  const R = Math.max(2, rangeability);
+  const u = 1 + Math.log(ratio) / Math.log(R);
+  return Math.max(0, Math.min(100, u * 100));
+}
+
+export function calcControlValveDrop(
+  Q_m3h: number,
+  densityKgM3: number,
+  kv: number
+): { dpBar: number; dpPa: number; dHm: number } {
+  const safeQ = Math.max(0, Q_m3h);
+  const safeRho = Math.max(0.1, densityKgM3);
+  if (!Number.isFinite(kv) || kv <= 0) {
+    return { dpBar: 0, dpPa: 0, dHm: 0 };
+  }
+  const sg = safeRho / 1000;
+  const dpBar = sg * Math.pow(safeQ / kv, 2);
+  const dpPa = dpBar * 1e5;
+  const dHm = dpPa / (safeRho * GRAVITY);
+  return { dpBar, dpPa, dHm };
+}
+
+export interface PumpSystemResult {
+  suction: HydraulicsResult;
+  discharge: HydraulicsResult;
+  sourceHeadM: number;
+  destHeadM: number;
+  staticElevHeadM: number;
+  staticPressHeadM: number;
+  staticTotalHeadM: number;
+  suctionLossM: number;
+  dischargeLossM: number;
+  valveKvActive: number;
+  valveOpeningEstPct: number | null;
+  valveLossM: number;
+  valveDpBar: number;
+  valveAuthority: number;
+  unthrottledHeadM: number;
+  unthrottledDpBar: number;
+  totalPumpHeadM: number;
+  totalPumpDpBar: number;
+  suctionFlangeTotalHeadM: number;
+  suctionFlangeGaugeBar: number;
+  dischargeFlangeTotalHeadM: number;
+  dischargeFlangeGaugeBar: number;
+  npshaM: number;
+  hydPowerKw: number;
+  valvePowerLossKw: number;
+  targetFlowFeasible: boolean;
+}
+
+export function calcPumpSystem(
+  Q_m3h: number,
+  suctionLeg: PipeLegConfig,
+  dischargeLeg: PipeLegConfig,
+  source: BoundaryCondition,
+  dest: BoundaryCondition,
+  densityKgM3: number,
+  viscosityMPas: number,
+  valve: ControlValveConfig,
+  pvKpa = 2.34,
+  atmBar = 1.01325,
+  sortedPumpPoints?: PumpCurvePoint[]
+): PumpSystemResult {
+  const safeRho = Math.max(0.1, densityKgM3);
+  const gamma = safeRho * GRAVITY;
+
+  const suction = calcHydraulics(
+    Q_m3h,
+    suctionLeg.lengthM,
+    suctionLeg.innerDiaMm,
+    suctionLeg.roughnessMm,
+    safeRho,
+    viscosityMPas,
+    suctionLeg.sumK,
+    0
+  );
+
+  const discharge = calcHydraulics(
+    Q_m3h,
+    dischargeLeg.lengthM,
+    dischargeLeg.innerDiaMm,
+    dischargeLeg.roughnessMm,
+    safeRho,
+    viscosityMPas,
+    dischargeLeg.sumK,
+    0
+  );
+
+  const sourceGaugePa = source.gaugeBar * 1e5;
+  const destGaugePa = dest.gaugeBar * 1e5;
+
+  const sourceHeadM = sourceGaugePa / gamma + source.elevM;
+  const destHeadM = destGaugePa / gamma + dest.elevM;
+  const staticElevHeadM = dest.elevM - source.elevM;
+  const staticPressHeadM = (destGaugePa - sourceGaugePa) / gamma;
+  const staticTotalHeadM = staticElevHeadM + staticPressHeadM;
+
+  const suctionLossM = suction.hDyn;
+  const dischargeLossM = discharge.hDyn;
+  const unthrottledHeadM = staticTotalHeadM + suctionLossM + dischargeLossM;
+  const unthrottledDpBar = (unthrottledHeadM * gamma) / 1e5;
+
+  let valveKvActive = Infinity;
+  let valveOpeningEstPct: number | null = null;
+  let valveLossM = 0;
+  let valveDpBar = 0;
+  let targetFlowFeasible = true;
+
+  if (valve.mode === 'throttle_kv') {
+    valveKvActive = calcControlValveKv(
+      valve.kv100,
+      valve.openingPct,
+      valve.characteristic,
+      valve.rangeability ?? 50
+    );
+    const drop = calcControlValveDrop(Q_m3h, safeRho, valveKvActive);
+    valveDpBar = drop.dpBar;
+    valveLossM = drop.dHm;
+    valveOpeningEstPct = valve.openingPct;
+  } else if (valve.mode === 'target_flow' && sortedPumpPoints && sortedPumpPoints.length >= 2) {
+    const xs = sortedPumpPoints.map((p) => p.q);
+    const hs = sortedPumpPoints.map((p) => p.h);
+    const pumpHeadAtQ = evaluateMonotoneCurve(xs, hs, Q_m3h);
+    const reqDeltaH = pumpHeadAtQ - unthrottledHeadM;
+    if (reqDeltaH >= 0 && Q_m3h >= xs[0] && Q_m3h <= xs[xs.length - 1]) {
+      targetFlowFeasible = true;
+      valveLossM = reqDeltaH;
+      valveDpBar = (valveLossM * gamma) / 1e5;
+      if (valveDpBar > 1e-9 && Q_m3h > 0) {
+        valveKvActive = Q_m3h * Math.sqrt((safeRho / 1000) / valveDpBar);
+        valveOpeningEstPct = calcControlValveOpeningFromKv(
+          valveKvActive,
+          valve.kv100,
+          valve.characteristic,
+          valve.rangeability ?? 50
+        );
+      } else {
+        valveKvActive = Infinity;
+        valveOpeningEstPct = 100;
+      }
+    } else {
+      targetFlowFeasible = false;
+      valveLossM = 0;
+      valveDpBar = 0;
+      valveKvActive = Infinity;
+      valveOpeningEstPct = null;
+    }
+  }
+
+  const totalPumpHeadM = unthrottledHeadM + valveLossM;
+  const totalPumpDpBar = (totalPumpHeadM * gamma) / 1e5;
+
+  const suctionFlangeTotalHeadM = sourceHeadM - suctionLossM;
+  const suctionFlangeGaugeBar = ((suctionFlangeTotalHeadM - suction.velHead) * gamma) / 1e5;
+
+  const dischargeFlangeTotalHeadM = destHeadM + dischargeLossM + valveLossM;
+  const dischargeFlangeGaugeBar = ((dischargeFlangeTotalHeadM - discharge.velHead) * gamma) / 1e5;
+
+  const npshaM =
+    (atmBar * 1e5 + sourceGaugePa - pvKpa * 1e3) / gamma + source.elevM - suctionLossM;
+
+  const dynPipeDpBar = ((suctionLossM + dischargeLossM) * gamma) / 1e5;
+  const dynTotalDpBar = dynPipeDpBar + valveDpBar;
+  const valveAuthority = dynTotalDpBar > 1e-9 ? valveDpBar / dynTotalDpBar : 0;
+
+  const hydPowerKw = (suction.Q * gamma * totalPumpHeadM) / 1000;
+  const valvePowerLossKw = (suction.Q * (valveDpBar * 1e5)) / 1000;
+
+  return {
+    suction,
+    discharge,
+    sourceHeadM,
+    destHeadM,
+    staticElevHeadM,
+    staticPressHeadM,
+    staticTotalHeadM,
+    suctionLossM,
+    dischargeLossM,
+    valveKvActive,
+    valveOpeningEstPct,
+    valveLossM,
+    valveDpBar,
+    valveAuthority,
+    unthrottledHeadM,
+    unthrottledDpBar,
+    totalPumpHeadM,
+    totalPumpDpBar,
+    suctionFlangeTotalHeadM,
+    suctionFlangeGaugeBar,
+    dischargeFlangeTotalHeadM,
+    dischargeFlangeGaugeBar,
+    npshaM,
+    hydPowerKw,
+    valvePowerLossKw,
+    targetFlowFeasible,
+  };
+}
+
+export function findPumpNetworkIntersection(
+  sortedPoints: PumpCurvePoint[],
+  suctionLeg: PipeLegConfig,
+  dischargeLeg: PipeLegConfig,
+  source: BoundaryCondition,
+  dest: BoundaryCondition,
+  densityKgM3: number,
+  viscosityMPas: number,
+  valve: ControlValveConfig,
+  pvKpa = 2.34,
+  atmBar = 1.01325
+): DutyPointResult {
+  if (sortedPoints.length < 2) {
+    return { found: false, qOp: 0, hOp: 0, dpOpBar: 0, effOp: 0, hydPowerKw: 0, shaftPowerKw: null };
+  }
+
+  const xs = sortedPoints.map((p) => p.q);
+  const hs = sortedPoints.map((p) => p.h);
+  const effs = sortedPoints.map((p) => p.eff);
+
+  const qMin = xs[0];
+  const qMax = xs[xs.length - 1];
+  if (qMax <= qMin) {
+    return { found: false, qOp: 0, hOp: 0, dpOpBar: 0, effOp: 0, hydPowerKw: 0, shaftPowerKw: null };
+  }
+
+  // In target_flow mode, intersection is solved against unthrottled system or current fixed valve;
+  // for throttle_kv and bypass modes we intersect directly with the controlled system curve.
+  const effectiveValve: ControlValveConfig =
+    valve.mode === 'target_flow' ? { ...valve, mode: 'bypass' } : valve;
+
+  const diffAt = (q: number) => {
+    const hPump = evaluateMonotoneCurve(xs, hs, q);
+    const sys = calcPumpSystem(
+      q,
+      suctionLeg,
+      dischargeLeg,
+      source,
+      dest,
+      densityKgM3,
+      viscosityMPas,
+      effectiveValve,
+      pvKpa,
+      atmBar
+    );
+    return hPump - sys.totalPumpHeadM;
+  };
+
+  const steps = 100;
+  let bracketLow: number | null = null;
+  let bracketHigh: number | null = null;
+  let prevQ = qMin;
+  let prevDiff = diffAt(prevQ);
+
+  for (let i = 1; i <= steps; i++) {
+    const q = qMin + ((qMax - qMin) * i) / steps;
+    const d = diffAt(q);
+    if (Math.abs(d) < 1e-6) {
+      bracketLow = q;
+      bracketHigh = q;
+      break;
+    }
+    if (prevDiff * d <= 0) {
+      bracketLow = prevQ;
+      bracketHigh = q;
+      break;
+    }
+    prevQ = q;
+    prevDiff = d;
+  }
+
+  if (bracketLow === null || bracketHigh === null) {
+    return { found: false, qOp: 0, hOp: 0, dpOpBar: 0, effOp: 0, hydPowerKw: 0, shaftPowerKw: null };
+  }
+
+  let lo = bracketLow;
+  let hi = bracketHigh;
+  let fLo = diffAt(lo);
+  for (let iter = 0; iter < 40; iter++) {
+    const mid = 0.5 * (lo + hi);
+    const fMid = diffAt(mid);
+    if (Math.abs(fMid) < 1e-6 || hi - lo < 1e-5) {
+      lo = mid;
+      hi = mid;
+      break;
+    }
+    if (fLo * fMid <= 0) {
+      hi = mid;
+    } else {
+      lo = mid;
+      fLo = fMid;
+    }
+  }
+
+  const qOp = 0.5 * (lo + hi);
+  const hOp = evaluateMonotoneCurve(xs, hs, qOp);
+  const effOp = Math.max(0, Math.min(100, evaluateMonotoneCurve(xs, effs, qOp)));
+  const dpOpBar = (densityKgM3 * GRAVITY * hOp) / 1e5;
+  const qM3s = qOp / 3600;
+  const hydPowerKw = (qM3s * densityKgM3 * GRAVITY * hOp) / 1000;
+  const shaftPowerKw = effOp > 1 ? hydPowerKw / (effOp / 100) : null;
+
+  return { found: true, qOp, hOp, dpOpBar, effOp, hydPowerKw, shaftPowerKw };
+}
+

@@ -8,6 +8,10 @@ import {
 import { calcTransitionK, CustomFitting, GRAVITY } from '../utils/hydraulicsSolver';
 
 interface FittingsBuilderProps {
+  targetLine: 'suction' | 'discharge';
+  onSelectTargetLine: (line: 'suction' | 'discharge') => void;
+  suctionTotalK: number;
+  dischargeTotalK: number;
   fittingQuantities: Record<string, number>;
   customFittings: CustomFitting[];
   activeDiaMm: number;
@@ -22,6 +26,10 @@ interface FittingsBuilderProps {
 }
 
 export const FittingsBuilder: React.FC<FittingsBuilderProps> = ({
+  targetLine,
+  onSelectTargetLine,
+  suctionTotalK,
+  dischargeTotalK,
   fittingQuantities,
   customFittings,
   activeDiaMm,
@@ -113,14 +121,39 @@ export const FittingsBuilder: React.FC<FittingsBuilderProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100 tracking-tight">
-            Fitting, Entrance, Exit &amp; Valve Losses
+            Fitting, Entrance, Exit &amp; Isolation Valve Losses
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Assemble system ΣK from standard Crane/Idelchik K-factors, Borda–Carnot transitions, or custom entries
+            Assemble suction (ΣK_s) and discharge (ΣK_d) minor losses separately (note: throttling CV is modeled in Discharge Control Valve)
           </p>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="inline-flex border border-slate-800 rounded-md overflow-hidden bg-[#070B12]">
+            <button
+              type="button"
+              onClick={() => onSelectTargetLine('suction')}
+              className={`px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                targetLine === 'suction'
+                  ? 'bg-emerald-500/15 text-emerald-300 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Suction (ΣK_s {suctionTotalK.toFixed(2)})
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTargetLine('discharge')}
+              className={`px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                targetLine === 'discharge'
+                  ? 'bg-cyan-500/15 text-cyan-300 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Discharge (ΣK_d {dischargeTotalK.toFixed(2)})
+            </button>
+          </div>
+
           {manualKOverride && (
             <button
               type="button"
@@ -130,9 +163,6 @@ export const FittingsBuilder: React.FC<FittingsBuilderProps> = ({
               Sync ΣK ({totalK.toFixed(2)})
             </button>
           )}
-          <span className="text-xs font-mono tabular-nums text-cyan-300 font-semibold">
-            Builder ΣK = {totalK.toFixed(2)}
-          </span>
           <button
             type="button"
             onClick={onClearAll}
@@ -140,7 +170,7 @@ export const FittingsBuilder: React.FC<FittingsBuilderProps> = ({
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-300 bg-[#070B12] border border-slate-800 rounded hover:border-rose-500/50 hover:text-rose-300 disabled:opacity-40 disabled:pointer-events-none transition-colors whitespace-nowrap cursor-pointer"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            Clear All
+            Clear {targetLine === 'suction' ? 'Suction' : 'Discharge'}
           </button>
         </div>
       </div>

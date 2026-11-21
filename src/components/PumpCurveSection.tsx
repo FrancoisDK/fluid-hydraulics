@@ -1,49 +1,64 @@
 import React, { useMemo, useState } from 'react';
 import { Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import {
-  calcHydraulics,
+  BoundaryCondition,
+  calcPumpSystem,
   computeNiceScale,
+  ControlValveConfig,
   evaluateMonotoneCurve,
-  findPumpSystemIntersection,
+  findPumpNetworkIntersection,
   formatAxisTick,
+  PipeLegConfig,
   PumpCurvePoint,
+  PumpSystemResult,
 } from '../utils/hydraulicsSolver';
 
+export const DEFAULT_PUMP_POINTS: PumpCurvePoint[] = [
+  { id: 'p1', q: 0, h: 38.0, eff: 0 },
+  { id: 'p2', q: 10, h: 36.5, eff: 52 },
+  { id: 'p3', q: 20, h: 33.0, eff: 73 },
+  { id: 'p4', q: 26, h: 29.2, eff: 78 },
+  { id: 'p5', q: 32, h: 24.0, eff: 72 },
+  { id: 'p6', q: 38, h: 16.5, eff: 56 },
+];
+
 interface PumpCurveSectionProps {
+  points: PumpCurvePoint[];
+  onChangePoints: React.Dispatch<React.SetStateAction<PumpCurvePoint[]>>;
   flowRateM3h: number;
-  pipeLengthM: number;
-  innerDiaMm: number;
-  roughnessMm: number;
+  suctionLeg: PipeLegConfig;
+  dischargeLeg: PipeLegConfig;
+  source: BoundaryCondition;
+  dest: BoundaryCondition;
   densityKgM3: number;
   viscosityMPas: number;
-  sumK: number;
-  elevZM: number;
-  currentSystemHeadM: number;
+  valve: ControlValveConfig;
+  pvKpa: number;
+  atmBar: number;
+  currentSystemResult: PumpSystemResult;
+  followDutyFlow: boolean;
+  onToggleFollowDuty: () => void;
   onApplyDutyFlow: (qM3h: number) => void;
 }
 
-const DEFAULT_PUMP_POINTS: PumpCurvePoint[] = [
-  { id: 'p1', q: 0, h: 32.0, eff: 0 },
-  { id: 'p2', q: 10, h: 31.0, eff: 52 },
-  { id: 'p3', q: 20, h: 27.5, eff: 73 },
-  { id: 'p4', q: 26, h: 24.0, eff: 78 },
-  { id: 'p5', q: 32, h: 19.2, eff: 72 },
-  { id: 'p6', q: 38, h: 12.5, eff: 56 },
-];
-
 export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
+  points,
+  onChangePoints,
   flowRateM3h,
-  pipeLengthM,
-  innerDiaMm,
-  roughnessMm,
+  suctionLeg,
+  dischargeLeg,
+  source,
+  dest,
   densityKgM3,
   viscosityMPas,
-  sumK,
-  elevZM,
-  currentSystemHeadM,
+  valve,
+  pvKpa,
+  atmBar,
+  currentSystemResult,
+  followDutyFlow,
+  onToggleFollowDuty,
   onApplyDutyFlow,
 }) => {
-  const [points, setPoints] = useState<PumpCurvePoint[]>(DEFAULT_PUMP_POINTS);
   const [showEfficiency, setShowEfficiency] = useState<boolean>(true);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -63,7 +78,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
     const hasEff = effs.some((e) => e > 0);
     if (!hasEff) return null;
 
-    // Sample 120 points to capture smooth peak efficiency on interpolated curve
     const qMin = xs[0];
     const qMax = xs[xs.length - 1];
     let bestQ = qMin;
@@ -86,31 +100,82 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
     };
   }, [sortedPoints]);
 
+  // Effective valve config used to plot the throttled curve
+  const effectiveCurveValve: ControlValveConfig = useMemo(() => {
+    if (
+      valve.mode === 'target_flow' &&
+      currentSystemResult.targetFlowFeasible &&
+      Number.isFinite(currentSystemResult.valveKvActive)
+    ) {
+      return {
+        mode: 'throttle_kv',
+        kv100: currentSystemResult.valveKvActive,
+        openingPct: 100,
+        characteristic: 'linear',
+      };
+    }
+    if (valve.mode === 'target_flow') {
+      return { ...valve, mode: 'bypass' };
+    }
+    return valve;
+  }, [valve, currentSystemResult.targetFlowFeasible, currentSystemResult.valveKvActive]);
+
   const duty = useMemo(
     () =>
-      findPumpSystemIntersection(
+      findPumpNetworkIntersection(
         sortedPoints,
-        pipeLengthM,
-        innerDiaMm,
-        roughnessMm,
+        suctionLeg,
+        dischargeLeg,
+        source,
+        dest,
         densityKgM3,
         viscosityMPas,
-        sumK,
-        elevZM
+        effectiveCurveValve,
+        pvKpa,
+        atmBar
       ),
     [
       sortedPoints,
-      pipeLengthM,
-      innerDiaMm,
-      roughnessMm,
+      suctionLeg,
+      dischargeLeg,
+      source,
+      dest,
       densityKgM3,
       viscosityMPas,
-      sumK,
-      elevZM,
+      effectiveCurveValve,
+      pvKpa,
+      atmBar,
     ]
   );
 
-  // Build SVG geometry
+  const unthrottledDuty = useMemo(
+    () =>
+      findPumpNetworkIntersection(
+        sortedPoints,
+        suctionLeg,
+        dischargeLeg,
+        source,
+        dest,
+        densityKgM3,
+        viscosityMPas,
+        { ...valve, mode: 'bypass' },
+        pvKpa,
+        atmBar
+      ),
+    [
+      sortedPoints,
+      suctionLeg,
+      dischargeLeg,
+      source,
+      dest,
+      densityKgM3,
+      viscosityMPas,
+      valve,
+      pvKpa,
+      atmBar,
+    ]
+  );
+
   const W = 680;
   const H = 310;
   const pad = { l: 56, r: showEfficiency ? 52 : 20, t: 18, b: 40 };
@@ -131,12 +196,13 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
     const series: {
       q: number;
       hSys: number;
+      hUnthrottled: number;
       hPump: number | null;
       eff: number | null;
     }[] = [];
 
-    let minH = Math.min(0, elevZM);
-    let maxH = Math.max(10, currentSystemHeadM * 1.1);
+    let minH = Math.min(0, currentSystemResult.staticTotalHeadM);
+    let maxH = Math.max(10, currentSystemResult.totalPumpHeadM * 1.1);
 
     if (hs.length > 0) {
       maxH = Math.max(maxH, ...hs);
@@ -145,15 +211,17 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
 
     for (let i = 0; i <= samples; i++) {
       const q = (qMax * i) / samples;
-      const sys = calcHydraulics(
+      const sys = calcPumpSystem(
         q,
-        pipeLengthM,
-        innerDiaMm,
-        roughnessMm,
+        suctionLeg,
+        dischargeLeg,
+        source,
+        dest,
         densityKgM3,
         viscosityMPas,
-        sumK,
-        elevZM
+        effectiveCurveValve,
+        pvKpa,
+        atmBar
       );
       const inPumpRange = xs.length >= 2 && q >= xs[0] - 1e-6 && q <= xs[xs.length - 1] + 1e-6;
       const hPump = inPumpRange ? evaluateMonotoneCurve(xs, hs, q) : null;
@@ -161,9 +229,16 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
         ? Math.max(0, Math.min(100, evaluateMonotoneCurve(xs, effs, q)))
         : null;
 
-      series.push({ q, hSys: sys.hTot, hPump, eff });
+      series.push({
+        q,
+        hSys: sys.totalPumpHeadM,
+        hUnthrottled: sys.unthrottledHeadM,
+        hPump,
+        eff,
+      });
+
       if (q <= (xs.length >= 2 ? xs[xs.length - 1] * 1.08 : qMax)) {
-        maxH = Math.max(maxH, sys.hTot);
+        maxH = Math.max(maxH, Math.min(sys.totalPumpHeadM, (hs[0] ?? 40) * 1.6));
       }
       if (hPump !== null) {
         maxH = Math.max(maxH, hPump);
@@ -176,14 +251,17 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
   }, [
     sortedPoints,
     flowRateM3h,
-    pipeLengthM,
-    innerDiaMm,
-    roughnessMm,
+    suctionLeg,
+    dischargeLeg,
+    source,
+    dest,
     densityKgM3,
     viscosityMPas,
-    sumK,
-    elevZM,
-    currentSystemHeadM,
+    effectiveCurveValve,
+    pvKpa,
+    atmBar,
+    currentSystemResult.staticTotalHeadM,
+    currentSystemResult.totalPumpHeadM,
   ]);
 
   const { xScale, yScale, qMax, series } = chartModel;
@@ -195,8 +273,14 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
   const mapEffY = (eff: number) => pad.t + ph - (Math.max(0, Math.min(100, eff)) / 100) * ph;
 
   const sysLinePts = series
-    .filter((pt) => pt.hSys <= yMax * 1.15 && pt.hSys >= yMin - 5)
+    .filter((pt) => pt.hSys <= yMax * 1.2 && pt.hSys >= yMin - 5)
     .map((pt) => `${mapX(pt.q).toFixed(1)},${mapY(pt.hSys).toFixed(1)}`)
+    .join(' ');
+
+  const showUnthrottled = valve.mode !== 'bypass' && currentSystemResult.valveDpBar > 1e-5;
+  const unthrottledLinePts = series
+    .filter((pt) => pt.hUnthrottled <= yMax * 1.2 && pt.hUnthrottled >= yMin - 5)
+    .map((pt) => `${mapX(pt.q).toFixed(1)},${mapY(pt.hUnthrottled).toFixed(1)}`)
     .join(' ');
 
   const pumpLinePts = series
@@ -209,18 +293,16 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
     .map((pt) => `${mapX(pt.q).toFixed(1)},${mapEffY(pt.eff!).toFixed(1)}`)
     .join(' ');
 
-  const handlePointChange = (
-    id: string,
-    field: 'q' | 'h' | 'eff',
-    rawVal: string
-  ) => {
+  const handlePointChange = (id: string, field: 'q' | 'h' | 'eff', rawVal: string) => {
     const num = parseFloat(rawVal);
-    setPoints((prev) =>
+    onChangePoints((prev) =>
       prev.map((p) =>
         p.id === id
           ? {
               ...p,
-              [field]: Number.isFinite(num) ? Math.max(0, field === 'eff' ? Math.min(100, num) : num) : 0,
+              [field]: Number.isFinite(num)
+                ? Math.max(0, field === 'eff' ? Math.min(100, num) : num)
+                : 0,
             }
           : p
       )
@@ -232,7 +314,7 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
     const nextQ = last ? Number((last.q + 5).toFixed(1)) : 10;
     const nextH = last ? Math.max(0, Number((last.h * 0.8).toFixed(1))) : 20;
     const nextEff = last ? Math.max(0, Number((last.eff * 0.85).toFixed(0))) : 60;
-    setPoints((prev) => [
+    onChangePoints((prev) => [
       ...prev,
       { id: `pt_${Date.now()}`, q: nextQ, h: nextH, eff: nextEff },
     ]);
@@ -240,23 +322,26 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
 
   const handleRemovePoint = (id: string) => {
     if (points.length <= 2) return;
-    setPoints((prev) => prev.filter((p) => p.id !== id));
+    onChangePoints((prev) => prev.filter((p) => p.id !== id));
   };
 
   const handleFitSampleToSystem = () => {
     const qRef = Math.max(2, flowRateM3h);
-    const sysAtRef = calcHydraulics(
+    const sysAtRef = calcPumpSystem(
       qRef,
-      pipeLengthM,
-      innerDiaMm,
-      roughnessMm,
+      suctionLeg,
+      dischargeLeg,
+      source,
+      dest,
       densityKgM3,
       viscosityMPas,
-      sumK,
-      elevZM
-    ).hTot;
-    const hRef = Math.max(5, sysAtRef);
-    const hShutoff = Math.max(hRef * 1.32, elevZM + hRef * 0.35 + 4);
+      { ...valve, mode: 'bypass' },
+      pvKpa,
+      atmBar
+    ).unthrottledHeadM;
+    // Give ~15% head margin for discharge control valve throttling at nominal design flow
+    const hRef = Math.max(6, sysAtRef * 1.15);
+    const hShutoff = Math.max(hRef * 1.32, currentSystemResult.staticTotalHeadM + hRef * 0.35 + 4);
     const qRunout = qRef * 1.48;
 
     const template: PumpCurvePoint[] = [
@@ -288,11 +373,11 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
       {
         id: 'fit_6',
         q: Number(qRunout.toFixed(1)),
-        h: Number((hRef * 0.50).toFixed(1)),
+        h: Number((hRef * 0.5).toFixed(1)),
         eff: 54,
       },
     ];
-    setPoints(template);
+    onChangePoints(template);
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -310,7 +395,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
 
   const hoverPt = hoverIdx !== null ? series[hoverIdx] : null;
 
-  // BEP status vs Duty Point
   let bepRatioStatus = { label: '— Enter η% to locate BEP', tone: 'text-slate-400' };
   let bepRatioPct: number | null = null;
   if (duty.found && bepInfo && bepInfo.q > 0) {
@@ -332,14 +416,29 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100 tracking-tight">
-            Centrifugal Pump Curve &amp; Best Efficiency Point (BEP)
+            Centrifugal Pump Curve, Control Valve Throttling &amp; BEP
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Plot pump Head–Flow (H–Q) and Efficiency (η–Q) datasheet points against the calculated Colebrook–White system curve
+            Discharge control valve shifts the system curve to throttle flow from unthrottled runout to controlled duty
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {valve.mode !== 'target_flow' && (
+            <button
+              type="button"
+              onClick={onToggleFollowDuty}
+              className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                followDutyFlow
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                  : 'bg-[#070B12] text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+              title="Automatically update system Flow Rate (Q) to match the Pump + Control Valve duty point"
+            >
+              {followDutyFlow ? '● Q Follows Duty' : '○ Lock Q to Duty'}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setShowEfficiency((v) => !v)}
@@ -358,12 +457,12 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-cyan-300 bg-cyan-500/10 border border-cyan-500/35 rounded hover:bg-cyan-500/20 transition-colors whitespace-nowrap cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            Fit Pump to Current Q/H
+            Fit Pump to System
           </button>
 
           <button
             type="button"
-            onClick={() => setPoints(DEFAULT_PUMP_POINTS)}
+            onClick={() => onChangePoints(DEFAULT_PUMP_POINTS)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-300 bg-[#070B12] border border-slate-800 rounded hover:border-slate-700 hover:text-slate-100 transition-colors whitespace-nowrap cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -376,17 +475,25 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4 bg-[#070B12] border border-slate-800/90 rounded-md p-3">
         <div>
           <div className="text-[11px] uppercase tracking-wider text-slate-400">
-            Duty Point (Intersection)
+            Controlled Duty Point
           </div>
           {duty.found ? (
-            <div className="mt-0.5 flex items-baseline gap-2 flex-wrap">
-              <span className="text-base font-mono tabular-nums font-semibold text-emerald-300">
-                {duty.qOp.toFixed(2)} m³/h
-              </span>
-              <span className="text-xs font-mono tabular-nums text-slate-300">
-                @ {duty.hOp.toFixed(2)} m ({duty.dpOpBar.toFixed(3)} bar)
-              </span>
-            </div>
+            <>
+              <div className="mt-0.5 flex items-baseline gap-2 flex-wrap">
+                <span className="text-base font-mono tabular-nums font-semibold text-emerald-300">
+                  {duty.qOp.toFixed(2)} m³/h
+                </span>
+                <span className="text-xs font-mono tabular-nums text-slate-300">
+                  @ {duty.hOp.toFixed(2)} m ({duty.dpOpBar.toFixed(3)} bar)
+                </span>
+              </div>
+              {unthrottledDuty.found && valve.mode !== 'bypass' && (
+                <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+                  Unthrottled: {unthrottledDuty.qOp.toFixed(1)} m³/h (ΔQ{' '}
+                  {(duty.qOp - unthrottledDuty.qOp).toFixed(1)})
+                </div>
+              )}
+            </>
           ) : (
             <div className="mt-0.5 text-xs font-medium text-rose-400">
               ✖ No intersection within pump Q range
@@ -448,7 +555,7 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
             </div>
           </div>
 
-          {duty.found && (
+          {duty.found && !followDutyFlow && (
             <button
               type="button"
               onClick={() => onApplyDutyFlow(Number(duty.qOp.toFixed(2)))}
@@ -471,9 +578,8 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
             onMouseMove={handleMouseMove}
             onMouseLeave={() => setHoverIdx(null)}
             role="img"
-            aria-label="Centrifugal pump head-flow curve versus system head curve and Best Efficiency Point"
+            aria-label="Centrifugal pump head-flow curve versus controlled and unthrottled system curves"
           >
-            {/* Preferred Operating Region (70% - 120% of Q_BEP) */}
             {bepInfo && (
               <rect
                 x={Math.max(pad.l, mapX(bepInfo.porMin))}
@@ -488,7 +594,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               />
             )}
 
-            {/* X Grid */}
             {xScale.ticks.map((qv) => {
               const x = mapX(qv);
               return (
@@ -508,7 +613,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               );
             })}
 
-            {/* Left Y Grid (Head in m) */}
             {yScale.ticks.map((hv) => {
               const y = mapY(hv);
               return (
@@ -528,7 +632,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               );
             })}
 
-            {/* Right Y Ticks (Efficiency 0-100%) */}
             {showEfficiency &&
               [0, 25, 50, 75, 100].map((ev) => {
                 const y = mapEffY(ev);
@@ -548,7 +651,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
                 );
               })}
 
-            {/* Axis labels */}
             <text
               x={pad.l + pw / 2}
               y={H - 5}
@@ -585,7 +687,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               </text>
             )}
 
-            {/* Efficiency Curve (dashed amber) */}
             {showEfficiency && effLinePts && (
               <polyline
                 points={effLinePts}
@@ -597,7 +698,19 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               />
             )}
 
-            {/* System Head Curve (solid cyan) */}
+            {/* Unthrottled System Head Curve (dashed slate) */}
+            {showUnthrottled && unthrottledLinePts && (
+              <polyline
+                points={unthrottledLinePts}
+                fill="none"
+                stroke="#64748B"
+                strokeWidth="1.6"
+                strokeDasharray="5,4"
+                strokeLinejoin="round"
+              />
+            )}
+
+            {/* Controlled System Head Curve (solid cyan) */}
             {sysLinePts && (
               <polyline
                 points={sysLinePts}
@@ -619,7 +732,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               />
             )}
 
-            {/* User-entered pump datasheet points */}
             {sortedPoints.map((pt) => (
               <circle
                 key={pt.id}
@@ -632,7 +744,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               />
             ))}
 
-            {/* BEP Vertical Guide + Marker */}
             {bepInfo && (
               <g>
                 <line
@@ -643,7 +754,6 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
                   stroke="rgba(245, 158, 11, 0.45)"
                   strokeDasharray="3,3"
                 />
-                {/* Diamond marker on Pump H-Q at BEP */}
                 <polygon
                   points={`${mapX(bepInfo.q)},${mapY(bepInfo.h) - 7} ${mapX(bepInfo.q) + 6},${mapY(bepInfo.h)} ${mapX(bepInfo.q)},${mapY(bepInfo.h) + 7} ${mapX(bepInfo.q) - 6},${mapY(bepInfo.h)}`}
                   fill="#F59E0B"
@@ -673,7 +783,17 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
               </g>
             )}
 
-            {/* Duty Point Intersection Marker */}
+            {showUnthrottled && unthrottledDuty.found && (
+              <circle
+                cx={mapX(unthrottledDuty.qOp)}
+                cy={mapY(unthrottledDuty.hOp)}
+                r="4"
+                fill="#64748B"
+                stroke="#070B12"
+                strokeWidth="1.5"
+              />
+            )}
+
             {duty.found && (
               <g>
                 <circle
@@ -684,16 +804,10 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
                   stroke="#070B12"
                   strokeWidth="2"
                 />
-                <circle
-                  cx={mapX(duty.qOp)}
-                  cy={mapY(duty.hOp)}
-                  r="2.5"
-                  fill="#06B6D4"
-                />
+                <circle cx={mapX(duty.qOp)} cy={mapY(duty.hOp)} r="2.5" fill="#06B6D4" />
               </g>
             )}
 
-            {/* Hover Probe */}
             {hoverPt && (
               <g>
                 <line
@@ -769,8 +883,14 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-3.5 h-0.5 bg-cyan-400 inline-block" />
-              System Curve (H–Q)
+              Throttled System (w/ CV)
             </span>
+            {showUnthrottled && (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-3.5 h-0.5 border-t-2 border-dashed border-slate-500 inline-block" />
+                Unthrottled System
+              </span>
+            )}
             {showEfficiency && (
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-3.5 h-0.5 border-t-2 border-dashed border-amber-400 inline-block" />
@@ -779,7 +899,7 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
             )}
             {bepInfo && (
               <span className="inline-flex items-center gap-1.5 text-amber-300">
-                ◆ BEP &amp; POR Band (70–120%)
+                ◆ BEP &amp; POR (70–120%)
               </span>
             )}
           </div>
@@ -866,7 +986,7 @@ export const PumpCurveSection: React.FC<PumpCurveSectionProps> = ({
           </div>
 
           <p className="text-[11px] text-slate-500 mt-2.5 leading-relaxed">
-            Points are automatically sorted by Q and interpolated with a smooth monotone cubic spline. Enter efficiency (%) to compute BEP and the 70–120% Preferred Operating Region.
+            Points are sorted by Q and interpolated with a smooth monotone cubic spline. Dashed curve shows unthrottled runout when the discharge control valve is throttling.
           </p>
         </div>
       </div>

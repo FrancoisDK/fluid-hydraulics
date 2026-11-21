@@ -1,42 +1,53 @@
 import React, { useMemo, useState } from 'react';
 import {
-  calcHydraulics,
+  BoundaryCondition,
+  calcPumpSystem,
   computeNiceScale,
+  ControlValveConfig,
   formatAxisTick,
-  HydraulicsResult,
+  PipeLegConfig,
+  PumpCurvePoint,
+  PumpSystemResult,
 } from '../utils/hydraulicsSolver';
 
 interface SystemCurveChartProps {
   flowRateM3h: number;
-  pipeLengthM: number;
-  innerDiaMm: number;
-  roughnessMm: number;
+  suctionLeg: PipeLegConfig;
+  dischargeLeg: PipeLegConfig;
+  source: BoundaryCondition;
+  dest: BoundaryCondition;
   densityKgM3: number;
   viscosityMPas: number;
-  sumK: number;
-  elevZM: number;
-  currentResult: HydraulicsResult;
+  valve: ControlValveConfig;
+  pvKpa: number;
+  atmBar: number;
+  currentResult: PumpSystemResult;
+  sortedPumpPoints: PumpCurvePoint[];
 }
 
 interface CurvePoint {
   q: number;
-  dpTot: number;
-  dpDyn: number;
-  v: number;
+  yTot: number;
+  yUnthrottled: number;
+  vd: number;
+  vs: number;
 }
 
 export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
   flowRateM3h,
-  pipeLengthM,
-  innerDiaMm,
-  roughnessMm,
+  suctionLeg,
+  dischargeLeg,
+  source,
+  dest,
   densityKgM3,
   viscosityMPas,
-  sumK,
-  elevZM,
+  valve,
+  pvKpa,
+  atmBar,
   currentResult,
+  sortedPumpPoints,
 }) => {
-  const [unit, setUnit] = useState<'bar' | 'kpa'>('bar');
+  const [unit, setUnit] = useState<'bar' | 'kpa' | 'm'>('bar');
   const [rangeMult, setRangeMult] = useState<number>(1.6);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -46,16 +57,35 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
   const pw = W - pad.l - pad.r;
   const ph = H - pad.t - pad.b;
 
-  const divisor = unit === 'bar' ? 1e5 : 1e3;
-  const unitLabel = unit === 'bar' ? 'bar' : 'kPa';
+  const unitLabel = unit === 'bar' ? 'bar' : unit === 'kpa' ? 'kPa' : 'm';
+
+  const toUnitVal = (headM: number, dpBar: number) => {
+    if (unit === 'm') return headM;
+    if (unit === 'kpa') return dpBar * 100;
+    return dpBar;
+  };
 
   const chartData = useMemo(() => {
-    const D_m = Math.max(0.1, innerDiaMm) / 1000;
+    const D_m = Math.max(0.1, dischargeLeg.innerDiaMm) / 1000;
     const area = Math.PI * D_m * D_m * 0.25;
     const fallbackQmax = Math.max(5, 3.0 * area * 3600);
     const rawQmax = flowRateM3h > 0 ? flowRateM3h * rangeMult : fallbackQmax;
     const xScale = computeNiceScale(0, rawQmax, 6);
     const qMax = xScale.niceMax;
+
+    const curveValve: ControlValveConfig =
+      valve.mode === 'target_flow' &&
+      currentResult.targetFlowFeasible &&
+      Number.isFinite(currentResult.valveKvActive)
+        ? {
+            mode: 'throttle_kv',
+            kv100: currentResult.valveKvActive,
+            openingPct: 100,
+            characteristic: 'linear',
+          }
+        : valve.mode === 'target_flow'
+          ? { ...valve, mode: 'bypass' }
+          : valve;
 
     const samples = 64;
     const pts: CurvePoint[] = [];
@@ -64,58 +94,75 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
 
     for (let i = 0; i <= samples; i++) {
       const q = (qMax * i) / samples;
-      const r = calcHydraulics(
+      const r = calcPumpSystem(
         q,
-        pipeLengthM,
-        innerDiaMm,
-        roughnessMm,
+        suctionLeg,
+        dischargeLeg,
+        source,
+        dest,
         densityKgM3,
         viscosityMPas,
-        sumK,
-        elevZM
+        curveValve,
+        pvKpa,
+        atmBar,
+        sortedPumpPoints
       );
-      const dpTot = r.dpTotPa / divisor;
-      const dpDyn = r.dpDynPa / divisor;
-      pts.push({ q, dpTot, dpDyn, v: r.v });
-      minY = Math.min(minY, dpTot, dpDyn);
-      maxY = Math.max(maxY, dpTot, dpDyn);
+      const yTot = toUnitVal(r.totalPumpHeadM, r.totalPumpDpBar);
+      const yUnthrottled = toUnitVal(r.unthrottledHeadM, r.unthrottledDpBar);
+      pts.push({
+        q,
+        yTot,
+        yUnthrottled,
+        vd: r.discharge.v,
+        vs: r.suction.v,
+      });
+      minY = Math.min(minY, yTot, yUnthrottled);
+      maxY = Math.max(maxY, yTot, yUnthrottled);
     }
 
-    const opDpTot = currentResult.dpTotPa / divisor;
-    minY = Math.min(minY, opDpTot, 0);
-    maxY = Math.max(maxY, opDpTot, 0.01);
+    const opY = toUnitVal(currentResult.totalPumpHeadM, currentResult.totalPumpDpBar);
+    minY = Math.min(minY, opY, 0);
+    maxY = Math.max(maxY, opY, 0.01);
 
     const yScale = computeNiceScale(minY, maxY * 1.06, 5);
-    return { xScale, yScale, qMax, pts, opDpTot };
+    return { xScale, yScale, qMax, pts, opY };
   }, [
     flowRateM3h,
-    pipeLengthM,
-    innerDiaMm,
-    roughnessMm,
+    suctionLeg,
+    dischargeLeg,
+    source,
+    dest,
     densityKgM3,
     viscosityMPas,
-    sumK,
-    elevZM,
+    valve,
+    pvKpa,
+    atmBar,
     rangeMult,
-    divisor,
-    currentResult.dpTotPa,
+    unit,
+    currentResult.totalPumpHeadM,
+    currentResult.totalPumpDpBar,
+    currentResult.targetFlowFeasible,
+    currentResult.valveKvActive,
+    sortedPumpPoints,
   ]);
 
-  const { xScale, yScale, qMax, pts, opDpTot } = chartData;
+  const { xScale, yScale, qMax, pts, opY } = chartData;
   const yMin = yScale.niceMin;
   const yMax = yScale.niceMax;
 
   const mapX = (q: number) => pad.l + (q / qMax) * pw;
-  const mapY = (dp: number) => pad.t + ph - ((dp - yMin) / (yMax - yMin)) * ph;
+  const mapY = (val: number) => pad.t + ph - ((val - yMin) / (yMax - yMin)) * ph;
 
   const yZero = mapY(0);
   const totPolyPoints = pts
-    .map((p) => `${mapX(p.q).toFixed(1)},${mapY(p.dpTot).toFixed(1)}`)
+    .map((p) => `${mapX(p.q).toFixed(1)},${mapY(p.yTot).toFixed(1)}`)
     .join(' ');
-  const dynPolyPoints = pts
-    .map((p) => `${mapX(p.q).toFixed(1)},${mapY(p.dpDyn).toFixed(1)}`)
+  const unthrottledPolyPoints = pts
+    .map((p) => `${mapX(p.q).toFixed(1)},${mapY(p.yUnthrottled).toFixed(1)}`)
     .join(' ');
   const areaPoints = `${mapX(0).toFixed(1)},${yZero.toFixed(1)} ${totPolyPoints} ${mapX(qMax).toFixed(1)},${yZero.toFixed(1)}`;
+
+  const showUnthrottledCurve = valve.mode !== 'bypass' && currentResult.valveDpBar > 1e-5;
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -132,9 +179,9 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
 
   const hoverPoint = hoverIdx !== null ? pts[hoverIdx] : null;
   const hoverLabel = hoverPoint
-    ? `Q=${hoverPoint.q.toFixed(1)} m³/h · ΔP=${
-        unit === 'bar' ? hoverPoint.dpTot.toFixed(4) : hoverPoint.dpTot.toFixed(2)
-      } ${unitLabel} · v=${hoverPoint.v.toFixed(2)} m/s`
+    ? `Q=${hoverPoint.q.toFixed(1)} m³/h · Req=${
+        unit === 'bar' ? hoverPoint.yTot.toFixed(3) : hoverPoint.yTot.toFixed(2)
+      } ${unitLabel} · vd=${hoverPoint.vd.toFixed(2)} m/s`
     : '';
 
   return (
@@ -142,29 +189,29 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100 tracking-tight">
-            System Curve (ΔP vs Flow Rate)
+            System Curve (Pump Requirement vs Flow Rate)
           </h2>
           <p className="text-xs text-slate-400 font-mono tabular-nums mt-0.5">
-            {Math.abs(elevZM) > 1e-6
-              ? `Solid: Total ΔP (incl. Δz = ${elevZM} m) · Dashed: Dynamic ΔP`
-              : 'Solid: Friction + Minor Losses (Colebrook-White)'}
+            {showUnthrottledCurve
+              ? 'Solid: With Control Valve · Dashed: Unthrottled (Suction + Discharge + Static)'
+              : 'Static (Δz + ΔP) + Suction + Discharge Colebrook–White Losses'}
           </p>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
           <div className="inline-flex border border-slate-800 rounded-md overflow-hidden bg-[#070B12]">
-            {(['bar', 'kpa'] as const).map((u) => (
+            {(['bar', 'kpa', 'm'] as const).map((u) => (
               <button
                 key={u}
                 type="button"
                 onClick={() => setUnit(u)}
-                className={`px-2.5 py-1 text-xs font-mono transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-2 py-1 text-xs font-mono transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   unit === u
                     ? 'bg-cyan-500/15 text-cyan-300 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {u === 'kpa' ? 'kPa' : 'bar'}
+                {u === 'kpa' ? 'kPa' : u}
               </button>
             ))}
           </div>
@@ -175,7 +222,7 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
                 key={m}
                 type="button"
                 onClick={() => setRangeMult(m)}
-                className={`px-2.5 py-1 text-xs font-mono transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-2 py-1 text-xs font-mono transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   rangeMult === m
                     ? 'bg-cyan-500/15 text-cyan-300 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -194,7 +241,7 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setHoverIdx(null)}
         role="img"
-        aria-label="System pressure drop versus volumetric flow rate curve"
+        aria-label="Pump system requirement versus volumetric flow rate curve"
       >
         {xScale.ticks.map((qVal) => {
           const x = mapX(qVal);
@@ -261,14 +308,14 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
           transform={`rotate(-90 14 ${pad.t + ph / 2})`}
           textAnchor="middle"
         >
-          Pressure Drop ΔP ({unitLabel})
+          {unit === 'm' ? 'Required Pump Head (m)' : `Required Pump ΔP (${unitLabel})`}
         </text>
 
         <polygon points={areaPoints} fill="rgba(6, 182, 212, 0.08)" />
 
-        {Math.abs(elevZM) > 1e-6 && (
+        {showUnthrottledCurve && (
           <polyline
-            points={dynPolyPoints}
+            points={unthrottledPolyPoints}
             fill="none"
             stroke="#64748B"
             strokeWidth="1.5"
@@ -296,15 +343,15 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
             />
             <line
               x1={pad.l}
-              y1={mapY(opDpTot)}
+              y1={mapY(opY)}
               x2={pad.l + pw}
-              y2={mapY(opDpTot)}
+              y2={mapY(opY)}
               stroke="rgba(34, 211, 238, 0.4)"
               strokeDasharray="3,3"
             />
             <circle
               cx={mapX(flowRateM3h)}
-              cy={mapY(opDpTot)}
+              cy={mapY(opY)}
               r="5"
               fill="#22D3EE"
               stroke="#070B12"
@@ -326,7 +373,7 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
             />
             <circle
               cx={mapX(hoverPoint.q)}
-              cy={mapY(hoverPoint.dpTot)}
+              cy={mapY(hoverPoint.yTot)}
               r="4.5"
               fill="#F59E0B"
               stroke="#070B12"
@@ -334,8 +381,8 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
             />
             {(() => {
               const cx = mapX(hoverPoint.q);
-              const cy = mapY(hoverPoint.dpTot);
-              const boxW = hoverLabel.length * 6.3 + 16;
+              const cy = mapY(hoverPoint.yTot);
+              const boxW = hoverLabel.length * 6.2 + 16;
               const boxH = 22;
               let bx = cx + 10;
               if (bx + boxW > pad.l + pw) bx = cx - boxW - 10;
@@ -372,7 +419,7 @@ export const SystemCurveChart: React.FC<SystemCurveChartProps> = ({
       <div className="flex items-center justify-between text-xs font-mono tabular-nums text-slate-400 mt-2">
         <span>
           Operating Point: {flowRateM3h.toFixed(1)} m³/h ·{' '}
-          {opDpTot.toFixed(unit === 'bar' ? 4 : 2)} {unitLabel}
+          {opY.toFixed(unit === 'bar' ? 4 : 2)} {unitLabel}
         </span>
         <span className="text-slate-500">Hover curve to probe</span>
       </div>

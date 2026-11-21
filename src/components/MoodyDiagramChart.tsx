@@ -2,9 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { solveFrictionFactor } from '../utils/hydraulicsSolver';
 
 interface MoodyDiagramChartProps {
-  currentRe: number;
-  currentF: number;
-  currentRelRough: number;
+  dischargeRe: number;
+  dischargeF: number;
+  dischargeRelRough: number;
+  suctionRe: number;
+  suctionF: number;
+  suctionRelRough: number;
 }
 
 const REL_ROUGH_CURVES = [0, 0.0002, 0.001, 0.005, 0.02, 0.05];
@@ -12,9 +15,12 @@ const RE_TICKS = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8];
 const F_TICKS = [0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.08, 0.1];
 
 export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
-  currentRe,
-  currentF,
-  currentRelRough,
+  dischargeRe,
+  dischargeF,
+  dischargeRelRough,
+  suctionRe,
+  suctionF,
+  suctionRelRough,
 }) => {
   const [probe, setProbe] = useState<{ re: number; f: number; x: number; y: number } | null>(null);
 
@@ -59,19 +65,18 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
     return { lamPts: lamPts.join(' '), turbCurves };
   }, []);
 
-  // Also plot the user's current relative roughness curve in subtle cyan if > 0
-  const activeRoughnessCurve = useMemo(() => {
-    if (currentRelRough <= 0) return '';
+  const dischargeRoughnessCurve = useMemo(() => {
+    if (dischargeRelRough <= 0) return '';
     const pts: string[] = [];
     for (let logR = Math.log10(4000); logR <= 8.0; logR += 0.14) {
       const re = Math.pow(10, logR);
-      const { f } = solveFrictionFactor(re, currentRelRough);
+      const { f } = solveFrictionFactor(re, dischargeRelRough);
       if (f >= 0.008 && f <= 0.1) {
         pts.push(`${mapX(re).toFixed(1)},${mapY(f).toFixed(1)}`);
       }
     }
     return pts.join(' ');
-  }, [currentRelRough]);
+  }, [dischargeRelRough]);
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -83,7 +88,7 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
     }
     const logRe = minLogRe + ((mx - pad.l) / pw) * (maxLogRe - minLogRe);
     const re = Math.pow(10, logRe);
-    const { f } = solveFrictionFactor(re, currentRelRough);
+    const { f } = solveFrictionFactor(re, dischargeRelRough);
     if (f >= 0.008 && f <= 0.1) {
       setProbe({ re, f, x: mapX(re), y: mapY(f) });
     } else {
@@ -91,23 +96,32 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
     }
   };
 
-  const opVisible =
-    currentRe >= 600 && currentRe <= 1e8 && currentF >= 0.008 && currentF <= 0.1;
+  const isVisible = (re: number, f: number) =>
+    re >= 600 && re <= 1e8 && f >= 0.008 && f <= 0.1;
+
+  const dischVisible = isVisible(dischargeRe, dischargeF);
+  const suctVisible = isVisible(suctionRe, suctionF);
 
   return (
     <section className="bg-[#0E1520] border border-slate-800 rounded-lg p-4 flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100 tracking-tight">
-            Moody Diagram Operating Point
+            Moody Diagram (Suction &amp; Discharge)
           </h2>
           <p className="text-xs text-slate-400 font-mono tabular-nums mt-0.5">
-            Colebrook-White family (ε/D = 0 to 0.05) · Dashed: Laminar 64/Re
+            Colebrook-White (ε/D = 0 to 0.05) · Dashed: Laminar 64/Re
           </p>
         </div>
-        <div className="text-xs font-mono tabular-nums text-cyan-300">
-          Re {currentRe > 0 ? currentRe.toExponential(2) : '—'} · f{' '}
-          {currentF > 0 ? currentF.toFixed(4) : '—'}
+        <div className="text-[11px] font-mono tabular-nums text-right">
+          <div className="text-emerald-300">
+            Suc: Re {suctionRe > 0 ? suctionRe.toExponential(2) : '—'} · f{' '}
+            {suctionF > 0 ? suctionF.toFixed(4) : '—'}
+          </div>
+          <div className="text-cyan-300">
+            Dis: Re {dischargeRe > 0 ? dischargeRe.toExponential(2) : '—'} · f{' '}
+            {dischargeF > 0 ? dischargeF.toFixed(4) : '—'}
+          </div>
         </div>
       </div>
 
@@ -117,7 +131,7 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setProbe(null)}
         role="img"
-        aria-label="Moody diagram showing Reynolds number versus Darcy friction factor"
+        aria-label="Moody diagram showing Reynolds number versus Darcy friction factor for suction and discharge pipes"
       >
         {RE_TICKS.map((re) => {
           const x = mapX(re);
@@ -193,36 +207,51 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
           </g>
         ))}
 
-        {activeRoughnessCurve && (
+        {dischargeRoughnessCurve && (
           <polyline
-            points={activeRoughnessCurve}
+            points={dischargeRoughnessCurve}
             fill="none"
             stroke="rgba(34, 211, 238, 0.45)"
             strokeWidth="1.6"
           />
         )}
 
-        {opVisible && (
+        {/* Suction operating point (emerald) */}
+        {suctVisible && (
+          <g>
+            <circle
+              cx={mapX(suctionRe)}
+              cy={mapY(suctionF)}
+              r="5"
+              fill="#34D399"
+              stroke="#070B12"
+              strokeWidth="2"
+            />
+          </g>
+        )}
+
+        {/* Discharge operating point (cyan) */}
+        {dischVisible && (
           <g>
             <line
-              x1={mapX(currentRe)}
+              x1={mapX(dischargeRe)}
               y1={pad.t}
-              x2={mapX(currentRe)}
+              x2={mapX(dischargeRe)}
               y2={pad.t + ph}
-              stroke="rgba(34, 211, 238, 0.45)"
+              stroke="rgba(34, 211, 238, 0.4)"
               strokeDasharray="3,3"
             />
             <line
               x1={pad.l}
-              y1={mapY(currentF)}
+              y1={mapY(dischargeF)}
               x2={pad.l + pw}
-              y2={mapY(currentF)}
-              stroke="rgba(34, 211, 238, 0.45)"
+              y2={mapY(dischargeF)}
+              stroke="rgba(34, 211, 238, 0.4)"
               strokeDasharray="3,3"
             />
             <circle
-              cx={mapX(currentRe)}
-              cy={mapY(currentF)}
+              cx={mapX(dischargeRe)}
+              cy={mapY(dischargeF)}
               r="5"
               fill="#22D3EE"
               stroke="#070B12"
@@ -308,9 +337,18 @@ export const MoodyDiagramChart: React.FC<MoodyDiagramChartProps> = ({
         </text>
       </svg>
 
-      <div className="flex items-center justify-between text-xs font-mono tabular-nums text-slate-400 mt-2">
-        <span>Active ε/D = {currentRelRough.toExponential(2)} (highlighted curve)</span>
-        <span className="text-slate-500">Shaded band: Transition (2300–4000)</span>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums text-slate-400 mt-2">
+        <span className="inline-flex items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 text-emerald-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+            Suction ε/D {suctionRelRough.toExponential(1)}
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-cyan-300">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block" />
+            Discharge ε/D {dischargeRelRough.toExponential(1)}
+          </span>
+        </span>
+        <span className="text-slate-500">Transition: 2300–4000</span>
       </div>
     </section>
   );
